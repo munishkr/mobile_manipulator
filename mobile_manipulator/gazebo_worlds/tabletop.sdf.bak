@@ -1,0 +1,158 @@
+
+<?xml version="1.0"?>
+<sdf version="1.9">
+
+  <world name="tabletop">
+
+    <!-- Gazebo systems -->
+    <plugin
+      filename="gz-sim-physics-system"
+      name="gz::sim::systems::Physics"/>
+
+    <plugin
+      filename="gz-sim-user-commands-system"
+      name="gz::sim::systems::UserCommands"/>
+
+    <plugin
+      filename="gz-sim-scene-broadcaster-system"
+      name="gz::sim::systems::SceneBroadcaster"/>
+
+    <plugin
+      filename="gz-sim-sensors-system"
+      name="gz::sim::systems::Sensors">
+      <render_engine>ogre2</render_engine>
+    </plugin>
+
+    <!-- Lighting -->
+    <light name="sun" type="directional">
+      <pose>0 0 5 0 0 0</pose>
+      <diffuse>0.9 0.9 0.9 1</diffuse>
+      <direction>-0.3 -0.4 -1</direction>
+    </light>
+
+    <!-- Ground -->
+    <model name="ground">
+      <static>true</static>
+      <link name="floor">
+        <collision name="collision">
+          <pose>0 0 -0.05 0 0 0</pose>
+          <geometry>
+            <box>
+              <size>5 5 0.1</size>
+            </box>
+          </geometry>
+        </collision>
+        <visual name="visual">
+          <pose>0 0 -0.05 0 0 0</pose>
+          <geometry>
+            <box>
+              <size>5 5 0.1</size>
+            </box>
+          </geometry>
+          <material>
+            <ambient>0.7 0.7 0.7 1</ambient>
+            <diffuse>0.7 0.7 0.7 1</diffuse>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- Table -->
+    <model name="table">
+      <pose>1.15 0 0 0 0 0</pose>
+      <static>true</static>
+
+      <link name="table_link">
+
+        <!-- Table top -->
+        <collision name="top_collision">
+          <pose>0 0 0.725 0 0 0</pose>
+          <geometry>
+            <box>
+              <size>0.8 0.6 0.05</size>
+            </box>
+          </geometry>
+        </collision>
+
+        <visual name="top_visual">
+          <pose>0 0 0.725 0 0 0</pose>
+          <geometry>
+            <box>
+              <size>0.8 0.6 0.05</size>
+            </box>
+          </geometry>
+          <material>
+            <ambient>0.55 0.35 0.2 1</ambient>
+            <diffuse>0.55 0.35 0.2 1</diffuse>
+          </material>
+        </visual>
+
+        <!-- Table support -->
+        <collision name="support_collision">
+          <pose>0 0 0.35 0 0 0</pose>
+          <geometry>
+            <box>
+              <size>0.12 0.12 0.70</size>
+            </box>
+          </geometry>
+        </collision>
+
+        <visual name="support_visual">
+          <pose>0 0 0.35 0 0 0</pose>
+          <geometry>
+            <box>
+              <size>0.12 0.12 0.70</size>
+            </box>
+          </geometry>
+        </visual>
+
+      </link>
+    </model>
+
+    <!-- Cylindrical cup -->
+    <model name="cup">
+      <pose>0.95 0 0.811 0 0 0</pose>
+      <static>false</static>
+
+      <link name="cup_link">
+
+        <inertial>
+          <mass>0.15</mass>
+          <inertia>
+            <ixx>0.000226</ixx>
+            <iyy>0.000226</iyy>
+            <izz>0.0000919</izz>
+            <ixy>0</ixy>
+            <ixz>0</ixz>
+            <iyz>0</iyz>
+          </inertia>
+        </inertial>
+
+        <collision name="collision">
+          <geometry>
+            <cylinder>
+              <radius>0.035</radius>
+              <length>0.12</length>
+            </cylinder>
+          </geometry>
+        </collision>
+
+        <visual name="visual">
+          <geometry>
+            <cylinder>
+              <radius>0.035</radius>
+              <length>0.12</length>
+            </cylinder>
+          </geometry>
+          <material>
+            <ambient>0.1 0.3 0.9 1</ambient>
+            <diffuse>0.1 0.3 0.9 1</diffuse>
+          </material>
+        </visual>
+
+      </link>
+    </model>
+
+  </world>
+
+</sdf>

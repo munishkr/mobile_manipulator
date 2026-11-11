@@ -1,0 +1,149 @@
+<?xml version="1.0"?>
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro"
+       name="dex3_extras">
+
+  <!-- Import all Unitree Dex3 links and joints -->
+  <xacro:include filename="$(env HOME)/mobile_manipulator/robot_description/dex3_1_l.urdf"/>
+
+  <!-- Attach Dex3 palm to Kinova tool frame -->
+  <joint name="dex3_mount_joint" type="fixed">
+
+    <parent link="arm_0_end_effector_link"/>
+    <child link="left_hand_palm_link"/>
+
+    <origin xyz="0 0 0.0"
+            rpy="0 -1.57079632679 0"/>
+
+  </joint>
+  <gazebo reference="dex3_mount_joint">
+    <preserveFixedJoint>true</preserveFixedJoint>
+</gazebo>
+
+
+<!-- Dex3 simulated joint hardware -->
+<ros2_control name="dex3_hardware" type="system">
+
+  <hardware>
+    <plugin>gz_ros2_control/GazeboSimSystem</plugin>
+  </hardware>
+
+  <joint name="left_hand_thumb_0_joint">
+    <command_interface name="position"/>
+    <state_interface name="position"/>
+    <state_interface name="velocity"/>
+  </joint>
+
+  <joint name="left_hand_thumb_1_joint">
+    <command_interface name="position"/>
+    <state_interface name="position"/>
+    <state_interface name="velocity"/>
+  </joint>
+
+  <joint name="left_hand_thumb_2_joint">
+    <command_interface name="position"/>
+    <state_interface name="position">
+      <param name="initial_value">0.2</param>
+    </state_interface>
+    <state_interface name="velocity"/>
+  </joint>
+
+  <joint name="left_hand_middle_0_joint">
+    <command_interface name="position"/>
+
+    <state_interface name="position">
+      <param name="initial_value">-0.2</param>
+    </state_interface>
+
+    <state_interface name="velocity"/>
+  </joint>
+
+  <joint name="left_hand_middle_1_joint">
+    <command_interface name="position"/>
+    <state_interface name="position">
+      <param name="initial_value">-0.2</param>
+    </state_interface>    <state_interface name="velocity"/>
+  </joint>
+
+  <joint name="left_hand_index_0_joint">
+    <command_interface name="position"/>
+    <state_interface name="position">
+      <param name="initial_value">-0.2</param>
+    </state_interface>
+    <state_interface name="velocity"/>
+  </joint>
+
+  <joint name="left_hand_index_1_joint">
+    <command_interface name="position"/>
+    <state_interface name="position">
+      <param name="initial_value">-0.2</param>
+    </state_interface>
+    <state_interface name="velocity"/>
+  </joint>
+
+</ros2_control>
+
+
+  <!-- Simulator-only: attach the cup after the fingers have approached it. -->
+  <gazebo>
+    <plugin filename="gz-sim-detachable-joint-system"
+            name="gz::sim::systems::DetachableJoint">
+      <parent_link>left_hand_palm_link</parent_link>
+      <child_model>cup</child_model>
+      <child_link>cup_link</child_link>
+      <!-- Ignored by gz-sim 8 (Harmonic): the joint is attached at spawn anyway.
+           runRobot.sh publishes /cup_grasp/detach right after the spawn. -->
+      <initial_attach>false</initial_attach>
+      <attach_topic>/cup_grasp/attach</attach_topic>
+      <detach_topic>/cup_grasp/detach</detach_topic>
+      <output_topic>/cup_grasp/state</output_topic>
+    </plugin>
+  </gazebo>
+
+  <link name="cup_wrist_camera_link">
+    <inertial>
+      <mass value="0.02"/>
+      <origin xyz="0 0 0"/>
+      <inertia ixx="0.00001" ixy="0" ixz="0"
+               iyy="0.00001" iyz="0" izz="0.00001"/>
+    </inertial>
+    <visual>
+      <geometry><box size="0.035 0.035 0.025"/></geometry>
+    </visual>
+  </link>
+
+  <joint name="cup_wrist_camera_joint" type="fixed">
+    <parent link="arm_0_end_effector_link"/>
+    <child link="cup_wrist_camera_link"/>
+    <origin xyz="0.04 0.08 0.06" rpy="0 0 0"/>
+  </joint>
+
+  <link name="cup_wrist_camera_optical_frame"/>
+  <joint name="cup_wrist_camera_optical_joint" type="fixed">
+    <parent link="cup_wrist_camera_link"/>
+    <child link="cup_wrist_camera_optical_frame"/>
+    <origin xyz="0 0 0" rpy="-1.570796 0 -1.570796"/>
+  </joint>
+
+  <gazebo reference="cup_wrist_camera_joint">
+    <preserveFixedJoint>true</preserveFixedJoint>
+  </gazebo>
+
+  <gazebo reference="cup_wrist_camera_optical_joint">
+    <preserveFixedJoint>true</preserveFixedJoint>
+  </gazebo>
+
+  <gazebo reference="cup_wrist_camera_link">
+    <sensor name="cup_wrist_rgbd" type="rgbd_camera">
+      <always_on>true</always_on>
+      <update_rate>10</update_rate>
+      <topic>/cup_wrist_rgbd</topic>
+      <gz_frame_id>cup_wrist_camera_optical_frame</gz_frame_id>
+      <camera>
+        <horizontal_fov>1.2</horizontal_fov>
+        <image><width>640</width><height>480</height></image>
+        <clip><near>0.08</near><far>3.0</far></clip>
+      </camera>
+    </sensor>
+  </gazebo>
+
+</robot>

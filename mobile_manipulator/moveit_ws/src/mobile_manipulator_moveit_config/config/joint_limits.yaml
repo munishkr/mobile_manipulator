@@ -1,0 +1,73 @@
+default_velocity_scaling_factor: 0.1
+default_acceleration_scaling_factor: 0.1
+joint_limits:
+  arm_0_joint_1:
+    has_velocity_limits: true
+    max_velocity: 1.3963
+    has_acceleration_limits: true
+    max_acceleration: 1.0
+  arm_0_joint_2:
+    has_velocity_limits: true
+    max_velocity: 1.3963
+    has_acceleration_limits: true
+    max_acceleration: 1.0
+  arm_0_joint_3:
+    has_velocity_limits: true
+    max_velocity: 1.3963
+    has_acceleration_limits: true
+    max_acceleration: 1.0
+  arm_0_joint_4:
+    has_velocity_limits: true
+    max_velocity: 1.3963
+    has_acceleration_limits: true
+    max_acceleration: 1.0
+  arm_0_joint_5:
+    has_velocity_limits: true
+    max_velocity: 1.2218
+    has_acceleration_limits: true
+    max_acceleration: 1.0
+  arm_0_joint_6:
+    has_velocity_limits: true
+    max_velocity: 1.2218
+    has_acceleration_limits: true
+    max_acceleration: 1.0
+  arm_0_joint_7:
+    has_velocity_limits: true
+    max_velocity: 1.2218
+    has_acceleration_limits: true
+    max_acceleration: 1.0
+  left_hand_index_0_joint:
+    has_velocity_limits: true
+    max_velocity: 12.0
+    has_acceleration_limits: true
+    max_acceleration: 2.0
+  left_hand_index_1_joint:
+    has_velocity_limits: true
+    max_velocity: 12.0
+    has_acceleration_limits: true
+    max_acceleration: 2.0
+  left_hand_middle_0_joint:
+    has_velocity_limits: true
+    max_velocity: 12.0
+    has_acceleration_limits: true
+    max_acceleration: 2.0
+  left_hand_middle_1_joint:
+    has_velocity_limits: true
+    max_velocity: 12.0
+    has_acceleration_limits: true
+    max_acceleration: 2.0
+  left_hand_thumb_0_joint:
+    has_velocity_limits: true
+    max_velocity: 3.14
+    has_acceleration_limits: true
+    max_acceleration: 2.0
+  left_hand_thumb_1_joint:
+    has_velocity_limits: true
+    max_velocity: 12.0
+    has_acceleration_limits: true
+    max_acceleration: 2.0
+  left_hand_thumb_2_joint:
+    has_velocity_limits: true
+    max_velocity: 12.0
+    has_acceleration_limits: true
+    max_acceleration: 2.0

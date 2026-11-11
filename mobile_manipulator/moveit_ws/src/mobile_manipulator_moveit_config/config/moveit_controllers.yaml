@@ -1,0 +1,33 @@
+
+moveit_controller_manager: moveit_simple_controller_manager/MoveItSimpleControllerManager
+
+moveit_simple_controller_manager:
+  controller_names:
+    - a200_0000/arm_0_joint_trajectory_controller
+    - a200_0000/dex3_joint_trajectory_controller
+
+  a200_0000/arm_0_joint_trajectory_controller:
+    type: FollowJointTrajectory
+    action_ns: follow_joint_trajectory
+    default: true
+    joints:
+      - arm_0_joint_1
+      - arm_0_joint_2
+      - arm_0_joint_3
+      - arm_0_joint_4
+      - arm_0_joint_5
+      - arm_0_joint_6
+      - arm_0_joint_7
+
+  a200_0000/dex3_joint_trajectory_controller:
+    type: FollowJointTrajectory
+    action_ns: follow_joint_trajectory
+    default: true
+    joints:
+      - left_hand_thumb_0_joint
+      - left_hand_thumb_1_joint
+      - left_hand_thumb_2_joint
+      - left_hand_middle_0_joint
+      - left_hand_middle_1_joint
+      - left_hand_index_0_joint
+      - left_hand_index_1_joint

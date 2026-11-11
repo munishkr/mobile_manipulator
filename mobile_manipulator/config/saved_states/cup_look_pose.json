@@ -1,0 +1,12 @@
+{
+  "description": "Wrist-camera look pose: whole table + cup in view (captured 2026-11-07)",
+  "arm_joints_rad": {
+    "arm_0_joint_1": 0.17879,
+    "arm_0_joint_2": 0.44998,
+    "arm_0_joint_3": 0.64247,
+    "arm_0_joint_4": -1.54916,
+    "arm_0_joint_5": -0.22869,
+    "arm_0_joint_6": 1.66361,
+    "arm_0_joint_7": -0.80222
+  }
+}

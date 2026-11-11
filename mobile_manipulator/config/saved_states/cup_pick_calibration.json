@@ -1,0 +1,56 @@
+{
+  "format_version": 1,
+  "created_utc": "2026-11-04T19:18:03.447664+00:00",
+  "description": "Taught open-finger palm pose relative to cup; verify once in Gazebo.",
+  "palm_in_cup_frame": {
+    "position": [
+      -0.08424883784939301,
+      -0.0653761963768203,
+      -0.002290681667679296
+    ],
+    "quaternion": [
+      0.9950940267987877,
+      -0.01966930094398317,
+      -0.06436177630716908,
+      -0.07251591673787658
+    ]
+  },
+  "world_fixed_grasp": {
+    "palm_minus_cup_xyz_m": [
+      -0.07688685599480483,
+      -0.07389401527103175,
+      -0.002290597418840301
+    ],
+    "palm_quaternion_xyzw": [
+      0.9947448993702852,
+      0.03288656453820497,
+      -0.0681004681468415,
+      -0.06901728253022435
+    ]
+  },
+  "seed_arm_joints_rad": {
+    "arm_0_joint_1": -0.47481669714525077,
+    "arm_0_joint_2": 0.7409061709285466,
+    "arm_0_joint_3": 0.5959161487738363,
+    "arm_0_joint_4": 1.2171217956172067,
+    "arm_0_joint_5": 0.5105506258573644,
+    "arm_0_joint_6": -0.22448981887614472,
+    "arm_0_joint_7": 2.11934966493033
+  },
+  "grasp_finger_joints_rad": {
+    "left_hand_thumb_0_joint": -5.3667897431966955e-05,
+    "left_hand_thumb_1_joint": 0.22089482904032778,
+    "left_hand_thumb_2_joint": 0.39889607535064037,
+    "left_hand_middle_0_joint": -0.6183193447646054,
+    "left_hand_middle_1_joint": -0.3999681739034592,
+    "left_hand_index_0_joint": -0.6582562698075487,
+    "left_hand_index_1_joint": -0.40002847383921947
+  },
+  "taught_cup_xyz_world": [
+    0.882764,
+    0.162688,
+    0.81
+  ],
+  "taught_palm_to_cup_distance_m": 0.10666377526684738,
+  "virtual_release_height_correction_m": 0.07
+}

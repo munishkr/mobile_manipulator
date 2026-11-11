@@ -1,0 +1,98 @@
+# Dev container for the mobile manipulator (Husky A200 + Kinova Gen3 + Dex3 hand)
+# on ROS 2 Jazzy + MoveIt 2 + Gazebo Harmonic.
+#
+#   docker compose -f .devcontainer/compose.yaml up -d --build
+#   docker compose -f .devcontainer/compose.yaml exec mm bash
+#
+# VS Code drives the same file through .devcontainer/devcontainer.json.
+#
+# This stack and ~/nav2_ws both use host networking. They can run at the same
+# time because they use different ROS_DOMAIN_IDs (43 here, 42 there) and
+# different GZ_PARTITIONs.
+
+name: mm-dev
+
+services:
+  mm:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        ROS_DISTRO: ${ROS_DISTRO:-jazzy}
+        USERNAME: ros
+        USER_UID: ${USER_UID:-1001}
+        USER_GID: ${USER_GID:-1001}
+    image: mm-jazzy-dev:latest
+    # No `hostname:` -- under network_mode: host a custom hostname resolves
+    # nowhere and every sudo call prints "unable to resolve host".
+
+    network_mode: host
+    # NOT ipc: host (Fast DDS shared-memory lock files would collide with any
+    # host-side ROS process). Private /dev/shm, sized for same-host DDS traffic.
+    shm_size: '2gb'
+
+    privileged: false
+    security_opt:
+      - seccomp:unconfined        # lets gdb/ASan run without a custom profile
+    cap_add:
+      - SYS_PTRACE
+
+    environment:
+      ROS_DISTRO: ${ROS_DISTRO:-jazzy}
+      # The colcon overlay sourced by the entrypoint / shell aliases.
+      COLCON_WS: /home/ros/mobile_manipulator/moveit_ws
+      # Where scripts/runRobot.sh looks for everything (its default, made explicit).
+      MOBILE_MANIPULATOR_ROOT: /home/ros/mobile_manipulator
+
+      # --- DDS -------------------------------------------------------------
+      ROS_DOMAIN_ID: ${ROS_DOMAIN_ID:-43}
+      ROS_AUTOMATIC_DISCOVERY_RANGE: ${ROS_AUTOMATIC_DISCOVERY_RANGE:-LOCALHOST}
+      RMW_IMPLEMENTATION: ${RMW_IMPLEMENTATION:-rmw_fastrtps_cpp}
+
+      # --- GUI -------------------------------------------------------------
+      DISPLAY: ${DISPLAY:-:0}
+      QT_X11_NO_MITSHM: '1'
+      LIBGL_ALWAYS_INDIRECT: '0'
+
+      # --- NVIDIA ----------------------------------------------------------
+      NVIDIA_VISIBLE_DEVICES: all
+      NVIDIA_DRIVER_CAPABILITIES: all   # must include 'graphics' for OpenGL
+      # Hybrid-graphics laptops need PRIME offload. Set GLX_VENDOR=mesa in .env
+      # on an Intel/AMD-only machine.
+      __NV_PRIME_RENDER_OFFLOAD: ${NV_PRIME_RENDER_OFFLOAD:-1}
+      __GLX_VENDOR_LIBRARY_NAME: ${GLX_VENDOR:-nvidia}
+
+      # --- Gazebo ----------------------------------------------------------
+      # Private partition: a Gazebo on the host or in nav2_ws cannot see this one.
+      GZ_PARTITION: mm_devcontainer
+      # gz-transport on loopback. With host networking it otherwise multicasts on the
+      # Wi-Fi interface and breaks when that drops ("Network is unreachable").
+      GZ_IP: 127.0.0.1
+
+    volumes:
+      - ..:/workspaces/mm_ws:cached
+      - /tmp/.X11-unix:/tmp/.X11-unix:rw
+      - ccache:/home/ros/.ccache
+      - roslogs:/home/ros/.ros
+      - gzcache:/home/ros/.gz          # downloaded Fuel models survive a rebuild
+
+    devices:
+      - /dev/dri:/dev/dri              # direct rendering (also the no-NVIDIA path)
+
+    # Remove this whole block on a machine without an NVIDIA GPU; Gazebo then
+    # falls back to llvmpipe software rendering (slow but functional).
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu, graphics, display, compute, utility]
+
+    working_dir: /workspaces/mm_ws
+    command: sleep infinity
+
+volumes:
+  ccache:
+  roslogs:
+  gzcache:

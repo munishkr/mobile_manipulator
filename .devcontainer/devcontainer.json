@@ -1,0 +1,47 @@
+{
+  "name": "ROS 2 Jazzy · Mobile Manipulator · MoveIt 2 · Gazebo Harmonic",
+  "dockerComposeFile": "compose.yaml",
+  "service": "mm",
+  "workspaceFolder": "/workspaces/mm_ws",
+  "remoteUser": "ros",
+
+  // Runs on the HOST before the container starts: lets container clients
+  // connect to the local X server. Harmless to re-run.
+  "initializeCommand": "bash ${localWorkspaceFolder}/scripts/x11-allow.sh",
+  "postCreateCommand": "bash .devcontainer/postCreate.sh",
+
+  "remoteEnv": {
+    "DISPLAY": "${localEnv:DISPLAY}",
+    "COLCON_WS": "/home/ros/mobile_manipulator/moveit_ws",
+    "MOBILE_MANIPULATOR_ROOT": "/home/ros/mobile_manipulator"
+  },
+
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "ms-iot.vscode-ros",
+        "ms-python.python",
+        "ms-vscode.cpptools-extension-pack",
+        "redhat.vscode-xml",
+        "redhat.vscode-yaml",
+        "twxs.cmake",
+        "llvm-vs-code-extensions.vscode-clangd"
+      ],
+      "settings": {
+        "terminal.integrated.defaultProfile.linux": "bash",
+        "files.associations": {
+          "*.urdf": "xml",
+          "*.sdf": "xml",
+          "*.xacro": "xml",
+          "*.world": "xml"
+        },
+        "python.analysis.extraPaths": ["/opt/ros/jazzy/lib/python3.12/site-packages"],
+        "C_Cpp.default.includePath": ["/opt/ros/jazzy/include/**", "${workspaceFolder}/mobile_manipulator/moveit_ws/src/**"],
+        "search.exclude": {
+          "**/build": true, "**/install": true, "**/log": true,
+          "**/mobile_manipulator/external": true, "**/mobile_manipulator/logs": true
+        }
+      }
+    }
+  }
+}

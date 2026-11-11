@@ -1,6 +1,0 @@
-[submodule "mobile_manipulator/external/ros2_kortex"]
-	path = mobile_manipulator/external/ros2_kortex
-	url = https://github.com/Kinovarobotics/ros2_kortex.git
-[submodule "mobile_manipulator/external/unitree_ros"]
-	path = mobile_manipulator/external/unitree_ros
-	url = https://github.com/unitreerobotics/unitree_ros.git

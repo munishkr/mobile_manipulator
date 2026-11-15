@@ -31,9 +31,14 @@ from message_filters import ApproximateTimeSynchronizer, Subscriber
 from rclpy.node import Node
 from rclpy.parameter import Parameter
 from rclpy.time import Time
-from sensor_msgs.msg import CameraInfo, Image
+from sensor_msgs.msg import CameraInfo, Image, PointCloud2
 from tf2_ros import Buffer, TransformListener
 from vision_msgs.msg import Detection2D, Detection2DArray, ObjectHypothesisWithPose
+from scipy.optimize import least_squares
+from visualization_msgs.msg import Marker
+from sensor_msgs_py import point_cloud2
+from std_msgs.msg import Header
+
 
 import cv2
 from ultralytics import YOLO
@@ -66,6 +71,8 @@ class CupDetector(Node):
                            imgsz=args.imgsz, verbose=False)  # warm-up (CUDA init) before the first frame
         self.tf = Buffer()
         self.tf_listener = TransformListener(self.tf, self)
+        self.cloud_pub = self.create_publisher(PointCloud2, "/cup_roi_cloud", 10)
+        self.marker_pub = self.create_publisher(Marker, "/cylinder_center_marker", 10)
         self.pose_pub = self.create_publisher(PoseStamped, '/cup_detector/pose', 10)
         self.det_pub = self.create_publisher(Detection2DArray, '/cup_detector/detections', 10)
         self.img_pub = self.create_publisher(Image, '/cup_detector/image', 2)
@@ -168,17 +175,98 @@ class CupDetector(Node):
         t = np.array([tr.transform.translation.x, tr.transform.translation.y,
                       tr.transform.translation.z])
         P = pts @ R.T + t                                 # surface points in base_link
+
+        #### replacing with circle fitting to find the center of the cup
+        # Estimate cylinder top and center height
         top = np.percentile(P[:, 2], 97)
         centre_z = top - pc.CUP_HEIGHT / 2
-        # x/y from the side wall only: a downward-looking camera also sees the top
-        # face, whose points already sit over the axis and must not be pushed out.
-        side = P[P[:, 2] < top - 0.015]
-        if len(side) < 10:
-            side = P
-        surf = np.median(side, axis=0)
-        ray = surf[:2] - t[:2]                           # horizontal viewing direction
-        ray /= max(np.linalg.norm(ray), 1e-6)
-        centre_xy = surf[:2] + pc.CUP_RADIUS * ray          # visible face -> axis
+
+        # 1. Isolate the middle section of the cylinder
+        z_min = top - 0.75 * pc.CUP_HEIGHT 
+        z_max = top - 0.25 * pc.CUP_HEIGHT
+
+        side = P[
+            (P[:, 2] >= z_min) &
+            (P[:, 2] <= z_max)
+        ]
+
+        if len(side) < 30:
+            return None, "Too few cylinder side points"
+
+        # 2. Project into XY plane
+        points_xy = side[:, :2]
+
+        # 3. Known radius from Gazebo model
+        radius = pc.CUP_RADIUS
+
+        # 4. Initial center estimate
+        surface = np.median(points_xy, axis=0)
+
+        direction = surface - t[:2]
+        direction_norm = np.linalg.norm(direction)
+
+        if direction_norm < 1e-6:
+            return None, "Invalid viewing direction"
+
+        direction /= direction_norm
+        initial_center = surface + radius * direction
+
+        # 5. Circle fitting objective
+        def residuals(center):
+            distances = np.linalg.norm(points_xy - center, axis=1)
+            return distances - radius
+
+        # 6. Optimize circle center
+        result = least_squares(residuals, initial_center,loss="soft_l1",f_scale=0.003)
+
+        if not result.success or not np.all(np.isfinite(result.x)):
+            return None, "Circle fitting failed"
+
+        centre_xy = result.x
+
+        # 7. Evaluate fitting quality
+        rms_error = np.sqrt(np.mean(residuals(centre_xy) ** 2))
+
+        self.get_logger().info(
+            f"Circle fit: X={centre_xy[0]:.4f}, "
+            f"Y={centre_xy[1]:.4f}, "
+            f"RMS={rms_error * 1000:.2f} mm",
+            throttle_duration_sec=2.0
+        )
+
+        #########
+        cloud_header = Header()
+        cloud_header.frame_id = "base_link"
+        cloud_header.stamp = rgb_msg.header.stamp
+
+        cloud = point_cloud2.create_cloud_xyz32(
+            cloud_header, side.astype(np.float32)
+        )
+
+        self.cloud_pub.publish(cloud)
+
+        marker = Marker() #center marker
+        
+        # Set the frame ID and timestamp
+        marker.header = cloud_header
+        marker.ns = "cylinder_center"
+        marker.id = 0
+        marker.type = Marker.SPHERE
+        marker.action = Marker.ADD
+        marker.pose.position.x = float(centre_xy[0])
+        marker.pose.position.y = float(centre_xy[1])
+        marker.pose.position.z = float(centre_z)
+        marker.pose.orientation.w = 1.0
+        marker.scale.x = 0.05  # Diameter of the sphere
+        marker.scale.y = 0.05
+        marker.scale.z = 0.05
+        marker.color.a = 1.0  
+        marker.color.r = 1.0  # Red color
+        marker.color.g = 0.0
+        marker.color.b = 0.0
+        self.marker_pub.publish(marker)
+
+        ###########
         msg = PoseStamped()
         msg.header.stamp = rgb_msg.header.stamp
         msg.header.frame_id = BASE_FRAME

@@ -6,17 +6,16 @@
     <!-- Gazebo systems -->
     <plugin
       filename="gz-sim-physics-system"
-      name="gz::sim::systems::Physics"/>
+      name="gz::sim::systems::Physics" />
 
     <plugin
       filename="gz-sim-user-commands-system"
-      name="gz::sim::systems::UserCommands"/>
+      name="gz::sim::systems::UserCommands" />
 
     <plugin
       filename="gz-sim-scene-broadcaster-system"
-      name="gz::sim::systems::SceneBroadcaster"/>
+      name="gz::sim::systems::SceneBroadcaster" />
 
-    
 
     <!-- Lighting -->
     <light name="sun" type="directional">
@@ -48,6 +47,81 @@
             <ambient>0.7 0.7 0.7 1</ambient>
             <diffuse>0.7 0.7 0.7 1</diffuse>
           </material>
+        </visual>
+      </link>
+    </model>
+
+    <model name="landmark_1">
+      <static>true</static>
+      <pose>-1.4 1.2 0 0 0 0</pose>
+
+      <link name="body">
+        <collision name="collision">
+          <pose>0 0 0.5 0 0 0</pose>
+          <geometry>
+            <box>
+              <size>0.35 0.60 1.0</size>
+            </box>
+          </geometry>
+        </collision>
+
+        <visual name="visual">
+          <pose>0 0 0.5 0 0 0</pose>
+          <geometry>
+            <box>
+              <size>0.35 0.60 1.0</size>
+            </box>
+          </geometry>
+        </visual>
+      </link>
+    </model>
+
+    <model name="landmark_2">
+      <static>true</static>
+      <pose>-1.55 -1.25 0 0 0 0</pose>
+
+      <link name="body">
+        <collision name="collision">
+          <pose>0 0 0.5 0 0 0</pose>
+          <geometry>
+            <box>
+              <size>0.35 0.60 1.0</size>
+            </box>
+          </geometry>
+        </collision>
+
+        <visual name="visual">
+          <pose>0 0 0.5 0 0 0</pose>
+          <geometry>
+            <box>
+              <size>0.35 0.60 1.0</size>
+            </box>
+          </geometry>
+        </visual>
+      </link>
+    </model>
+
+    <model name="landmark_3">
+      <static>true</static>
+      <pose>1.70 1.55 0 0 0 0</pose>
+
+      <link name="body">
+        <collision name="collision">
+          <pose>0 0 0.5 0 0 0</pose>
+          <geometry>
+            <box>
+              <size>0.35 0.60 1.0</size>
+            </box>
+          </geometry>
+        </collision>
+
+        <visual name="visual">
+          <pose>0 0 0.5 0 0 0</pose>
+          <geometry>
+            <box>
+              <size>0.35 0.60 1.0</size>
+            </box>
+          </geometry>
         </visual>
       </link>
     </model>

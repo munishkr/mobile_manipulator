@@ -36,6 +36,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         ros-${ROS_DISTRO}-ros-gz-sim \
         ros-${ROS_DISTRO}-ros-gz-bridge \
         ros-${ROS_DISTRO}-ros-gz-image \
+        ros-${ROS_DISTRO}-navigation2 \
+        ros-${ROS_DISTRO}-nav2-bringup \
+        ros-${ROS_DISTRO}-clearpath-nav2-demos \
+        ros-${ROS_DISTRO}-slam-toolbox \
+
     && rm -rf /var/lib/apt/lists/*
 
 # --- 3. Manipulation stack: MoveIt 2, ros2_control, Clearpath A200 simulator -

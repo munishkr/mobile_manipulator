@@ -11,6 +11,7 @@ KINOVA_ROOT="$ROOT/external/ros2_kortex"
 KINOVA_PKG="$KINOVA_ROOT/kortex_description"
 DEX3_CFG="$ROOT/config/dex3_controllers.yaml"
 SCENE="$ROOT/scripts/add_scene_objects.py"
+MAP="$ROOT/maps/tabletop.yaml"
 LOG_DIR=""
 PIDS=()
 NAMES=()
@@ -72,13 +73,16 @@ need_file "$WORLD"
 need_file "$HOME/clearpath/robot.yaml"
 need_file "$DEX3_CFG"
 need_file "$SCENE"
+need_file "$MAP"
+need_file "$ROOT/maps/tabletop.pgm"
 need_file "$WS/src/mobile_manipulator_moveit_config/launch/move_group_gazebo.launch.py"
 need_file "$WS/src/mobile_manipulator_moveit_config/launch/moveit_rviz.launch.py"
 need_file "$WS/src/mobile_manipulator_moveit_config/config/mm_camera.rviz"
 [[ -d "$KINOVA_PKG/arms/gen3/7dof/meshes" ]] || fail "Missing Kinova mesh directory: $KINOVA_PKG"
 ros2 pkg prefix clearpath_gz >/dev/null || fail 'ROS package clearpath_gz not available'
 ros2 pkg prefix mobile_manipulator_moveit_config >/dev/null || fail 'MoveIt config package not available'
-
+ros2 pkg prefix clearpath_nav2_demos >/dev/null || fail "Clearpath Nav2 demos not installed"
+ros2 pkg prefix nav2_bringup >/dev/null || fail "Nav2 bringup not installed"
 # Identical Gazebo mesh resource path used in your working manual terminals.
 export GZ_SIM_RESOURCE_PATH="$KINOVA_ROOT${GZ_SIM_RESOURCE_PATH:+:$GZ_SIM_RESOURCE_PATH}"
 # gz-transport on loopback: with host networking it otherwise multicasts on the Wi-Fi
@@ -284,9 +288,61 @@ if ! grep -q 'Table and cup added to MoveIt planning scene' "$LOG_DIR/scene.log"
   fail 'Planning scene did not report successful insertion'
 fi
 
+# Terminal 7: AMCL localization using saved occupancy map
+message 'Starting map server and AMCL'
+
+start localization ros2 launch clearpath_nav2_demos localization.launch.py \
+  use_sim_time:=true \
+  "setup_path:=$HOME/clearpath" \
+  "map:=$MAP" \
+  scan_topic:=/a200_0000/sensors/lidar2d_0/scan
+
+wait_for_line 'Map server active' 180 'active [3]' \
+  ros2 lifecycle get /a200_0000/map_server
+
+wait_for_line 'AMCL active' 180 'active [3]' \
+  ros2 lifecycle get /a200_0000/amcl
+
+# Random-start initialization: distribute AMCL particles across free map space
+wait_for_line 'AMCL global-localization service' 60 \
+  '/a200_0000/reinitialize_global_localization' ros2 service list
+
+message 'Initializing AMCL global localization'
+
+if ! timeout 30 ros2 service call \
+    /a200_0000/reinitialize_global_localization \
+    std_srvs/srv/Empty '{}' \
+    >"$LOG_DIR/amcl_initialization.log" 2>&1; then
+  fail 'AMCL global localization initialization failed'
+fi
+
+# Terminal 8: Nav2 navigation
+message 'Starting Nav2 navigation stack'
+
+start navigation ros2 launch clearpath_nav2_demos nav2.launch.py \
+  use_sim_time:=true \
+  "setup_path:=$HOME/clearpath" \
+  scan_topic:=/a200_0000/sensors/lidar2d_0/scan \
+  slam:=false
+
+wait_for_line 'Nav2 planner active' 240 'active [3]' \
+  ros2 lifecycle get /a200_0000/planner_server
+
+wait_for_line 'Nav2 controller active' 240 'active [3]' \
+  ros2 lifecycle get /a200_0000/controller_server
+
+wait_for_line 'Nav2 navigator active' 240 'active [3]' \
+  ros2 lifecycle get /a200_0000/bt_navigator
+
+wait_for_line 'NavigateToPose action' 90 \
+  '/a200_0000/navigate_to_pose' ros2 action list
+
+message 'Ready: AMCL + Nav2 navigation'
+
 ALLOW_RVIZ_EXIT=1
-message 'READY — Gazebo + A200/Kinova/Dex3 + MoveIt + RViz + table/cup'
-message 'RViz can now be closed independently; Gazebo and MoveIt will remain running.'
+message 'READY — Gazebo + A200 + Kinova + Dex3 + MoveIt + AMCL + Nav2 + RViz'
+message "Navigation map: $MAP"
+message 'Verify AMCL convergence before sending navigation goals.'message 'RViz can now be closed independently; Gazebo and MoveIt will remain running.'
 message 'Set RViz Fixed Frame to base_link if the goal marker is not visible.'
 message 'Press Ctrl+C to stop launched components.'
 while :; do

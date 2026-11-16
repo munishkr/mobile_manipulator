@@ -3,6 +3,14 @@
 
   <world name="tabletop">
 
+    <!-- Physics runs single-threaded; at the default 1 ms step the A200 + Kinova + Dex3
+         model only reached ~0.22x real time. 4 ms = 4x fewer steps per sim second.
+         If grasps or wheel contacts get jittery, drop to 0.002. -->
+    <physics name="4ms" type="ignored">
+      <max_step_size>0.004</max_step_size>
+      <real_time_factor>1.0</real_time_factor>
+    </physics>
+
     <!-- Gazebo systems -->
     <plugin
       filename="gz-sim-physics-system"

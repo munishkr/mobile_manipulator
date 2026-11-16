@@ -146,7 +146,7 @@ wait_for_line() {
   message "Waiting for $label (maximum ${seconds}s)"
   while ((SECONDS - started < seconds)); do
     check_children
-    result="$(timeout 8 "$@" 2>/dev/null || true)"
+    result="$(timeout 25 "$@" 2>/dev/null || true)"
     if grep -Fxq -- "$expected" <<< "$result"; then
       message "Ready: $label"
       return 0
@@ -156,8 +156,32 @@ wait_for_line() {
   fail "Timed out waiting for $label: $expected"
 }
 
+# Wait for a Nav2 lifecycle manager to report its nodes active, read from the launch
+# log rather than `ros2 lifecycle get` (that CLI probe intermittently never finds the
+# node in this busy graph, even though map_server/AMCL are already active).
+wait_for_lifecycle() {
+  local label="$1" seconds="$2" log="$LOG_DIR/$3.log" manager="$4"
+  local started=$SECONDS
+  message "Waiting for $label (maximum ${seconds}s)"
+  while ((SECONDS - started < seconds)); do
+    check_children
+    if grep -aEq "${manager}\]: .*Managed nodes are active" "$log" 2>/dev/null; then
+      message "Ready: $label"
+      return 0
+    fi
+    if grep -aEq "${manager}\]: .*(Failed to bring up|Aborting bringup)" "$log" 2>/dev/null; then
+      fail "$label: $manager failed to activate its nodes (see $log)"
+    fi
+    sleep 2
+  done
+  fail "Timed out waiting for $label ($manager in $log)"
+}
+
 # Terminal 1: Gazebo
-start gazebo gz sim -r -v 4 "$WORLD"
+# MM_GZ_HEADLESS=1 runs the Gazebo server only (no GUI window, ~3 cores freed; RViz still works).
+GZ_ARGS=(-r -v 4)
+[[ "${MM_GZ_HEADLESS:-0}" == 1 ]] && GZ_ARGS+=(-s)
+start gazebo gz sim "${GZ_ARGS[@]}" "$WORLD"
 wait_for_line 'Gazebo tabletop world' 120 '/world/tabletop/create' gz service -l
 
 # Sim clock: Gazebo -> ROS. Clearpath's gz_sim.launch.py normally bridges this, but we
@@ -297,11 +321,8 @@ start localization ros2 launch clearpath_nav2_demos localization.launch.py \
   "map:=$MAP" \
   scan_topic:=/a200_0000/sensors/lidar2d_0/scan
 
-wait_for_line 'Map server active' 180 'active [3]' \
-  ros2 lifecycle get /a200_0000/map_server
-
-wait_for_line 'AMCL active' 180 'active [3]' \
-  ros2 lifecycle get /a200_0000/amcl
+wait_for_lifecycle 'Map server + AMCL active' 180 localization \
+  lifecycle_manager_localization
 
 # Random-start initialization: distribute AMCL particles across free map space
 wait_for_line 'AMCL global-localization service' 60 \
@@ -325,14 +346,8 @@ start navigation ros2 launch clearpath_nav2_demos nav2.launch.py \
   scan_topic:=/a200_0000/sensors/lidar2d_0/scan \
   slam:=false
 
-wait_for_line 'Nav2 planner active' 240 'active [3]' \
-  ros2 lifecycle get /a200_0000/planner_server
-
-wait_for_line 'Nav2 controller active' 240 'active [3]' \
-  ros2 lifecycle get /a200_0000/controller_server
-
-wait_for_line 'Nav2 navigator active' 240 'active [3]' \
-  ros2 lifecycle get /a200_0000/bt_navigator
+wait_for_lifecycle 'Nav2 stack active' 240 navigation \
+  lifecycle_manager_navigation
 
 wait_for_line 'NavigateToPose action' 90 \
   '/a200_0000/navigate_to_pose' ros2 action list
@@ -342,7 +357,8 @@ message 'Ready: AMCL + Nav2 navigation'
 ALLOW_RVIZ_EXIT=1
 message 'READY — Gazebo + A200 + Kinova + Dex3 + MoveIt + AMCL + Nav2 + RViz'
 message "Navigation map: $MAP"
-message 'Verify AMCL convergence before sending navigation goals.'message 'RViz can now be closed independently; Gazebo and MoveIt will remain running.'
+message 'Verify AMCL convergence before sending navigation goals.'
+message 'RViz can now be closed independently; Gazebo and MoveIt will remain running.'
 message 'Set RViz Fixed Frame to base_link if the goal marker is not visible.'
 message 'Press Ctrl+C to stop launched components.'
 while :; do

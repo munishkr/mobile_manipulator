@@ -7,7 +7,7 @@ from geometry_msgs.msg import Pose
 from moveit_msgs.msg import CollisionObject, PlanningScene
 from moveit_msgs.srv import ApplyPlanningScene
 from shape_msgs.msg import SolidPrimitive
-
+from place_cup import gazebo_pose, cup_pose_in_base
 
 FRAME = "base_link"
 
@@ -24,7 +24,7 @@ def make_pose(x, y, z):
     return pose
 
 
-def make_box(name, center, dimensions):
+def make_box(name, pose, dimensions):
     obj = CollisionObject()
     obj.header.frame_id = FRAME
     obj.id = name
@@ -34,13 +34,12 @@ def make_box(name, center, dimensions):
     shape.dimensions = [float(v) for v in dimensions]
 
     obj.primitives.append(shape)
-    obj.primitive_poses.append(make_pose(*center))
+    obj.primitive_poses.append(pose)
     obj.operation = CollisionObject.ADD
-
     return obj
 
 
-def make_cylinder(name, center, height, radius):
+def make_cylinder(name, pose, height, radius):
     obj = CollisionObject()
     obj.header.frame_id = FRAME
     obj.id = name
@@ -50,9 +49,8 @@ def make_cylinder(name, center, height, radius):
     shape.dimensions = [float(height), float(radius)]
 
     obj.primitives.append(shape)
-    obj.primitive_poses.append(make_pose(*center))
+    obj.primitive_poses.append(pose)
     obj.operation = CollisionObject.ADD
-
     return obj
 
 
@@ -72,18 +70,29 @@ def main():
         node.destroy_node()
         rclpy.shutdown()
         return
+    base_world = gazebo_pose("a200_0000/robot")
+    table_world = gazebo_pose("table")
+    cup_world = gazebo_pose("cup")
+
+    # Existing conservative MoveIt table collision box:
+    # 0.8 x 0.6 x 0.75 m, centered 0.375 m above the table model origin.
+    table_center_world = (
+        table_world[0],
+        table_world[1],
+        table_world[2] + 0.375,
+        *table_world[3:]
+    )
+
+    # Convert Gazebo world poses into the current robot base frame.
+    table_base = cup_pose_in_base(table_center_world, base_world)
+    cup_base = cup_pose_in_base(cup_world, base_world)
 
     table = make_box(
-        "work_table",
-        (1.15, 0.0, 0.375 - BASE_Z),
-        (0.8, 0.6, 0.75)
+    "work_table", table_base, (0.8, 0.6, 0.75)
     )
 
     cup = make_cylinder(
-        "target_cup",
-        (0.95, 0.0, 0.811 - BASE_Z),
-        0.12,
-        0.035
+    "target_cup", cup_base, 0.12, 0.035
     )
 
     scene = PlanningScene()

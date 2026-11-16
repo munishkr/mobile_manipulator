@@ -28,6 +28,8 @@ def generate_launch_description():
         remappings=[
             ("/joint_states", "/a200_0000/platform/joint_states"),
             ("joint_states", "/a200_0000/platform/joint_states"),
+            ("/tf", "/a200_0000/tf"),
+            ("/tf_static", "/a200_0000/tf_static"),
         ],
     )
 

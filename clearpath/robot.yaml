@@ -17,7 +17,15 @@ sensors:
           ip_port: 10940
           angle_min: -2.356
           angle_max: 2.356
-          
+  # Gyro for EKF yaw: Husky is skid-steer, so wheel odometry is badly wrong in turns.
+  imu:
+    - model: redshift_um7
+      urdf_enabled: true
+      launch_enabled: true
+      parent: base_link
+      xyz: [0.0, 0.0, 0.1]
+      rpy: [0.0, 0.0, 0.0]
+
 system:
   hosts:
     - hostname: cpr-a200-0000
@@ -38,6 +46,16 @@ platform:
   extras:
     urdf:
       path: /home/ros/mobile_manipulator/robot_description/dex3_extras.urdf.xacro
+    ros_parameters:
+      # Wheel odom: forward velocity only (+ vy=0 constraint). Yaw rate from the IMU only.
+      # Setting ekf_node here stops the generator adding imu0 itself, so it is listed explicitly.
+      ekf_node:
+        odom0_config: [false, false, false, false, false, false, true, true, false, false, false, false, false, false, false]
+        imu0: sensors/imu_0/data
+        imu0_config: [false, false, false, false, false, false, false, false, false, false, false, true, false, false, false]
+        imu0_differential: false
+        imu0_queue_size: 10
+        imu0_remove_gravitational_acceleration: true
 
 manipulators:
   arms:

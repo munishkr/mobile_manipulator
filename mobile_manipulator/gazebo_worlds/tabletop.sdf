@@ -24,6 +24,12 @@
       filename="gz-sim-scene-broadcaster-system"
       name="gz::sim::systems::SceneBroadcaster" />
 
+    <!-- Drives the base IMU (sensors.imu in ~/clearpath/robot.yaml) used by the EKF for yaw.
+         Not the rendering Sensors system, so it does not clash with the robot model's. -->
+    <plugin
+      filename="gz-sim-imu-system"
+      name="gz::sim::systems::Imu" />
+
 
     <!-- Lighting -->
     <light name="sun" type="directional">

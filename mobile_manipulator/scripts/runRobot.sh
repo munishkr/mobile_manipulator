@@ -11,7 +11,8 @@ KINOVA_ROOT="$ROOT/external/ros2_kortex"
 KINOVA_PKG="$KINOVA_ROOT/kortex_description"
 DEX3_CFG="$ROOT/config/dex3_controllers.yaml"
 SCENE="$ROOT/scripts/add_scene_objects.py"
-MAP="$ROOT/maps/tabletop.yaml"
+MAP="$ROOT/maps/tabletop_nav.yaml"  # generated from the world: scripts/make_map_from_world.py
+NAV2_PARAMS="$ROOT/config/nav2/a200_nav2_slow.yaml"  # slowed base speed limits
 LOG_DIR=""
 PIDS=()
 NAMES=()
@@ -70,11 +71,15 @@ for cmd in ros2 gz python3 setsid timeout; do
   command -v "$cmd" >/dev/null || fail "Missing command: $cmd"
 done
 need_file "$WORLD"
+need_file "$NAV2_PARAMS"
+need_file "$ROOT/launch/nav2_slow.launch.py"
+need_file "$ROOT/launch/localization_custom.launch.py"
+need_file "$ROOT/config/nav2/a200_localization.yaml"
 need_file "$HOME/clearpath/robot.yaml"
 need_file "$DEX3_CFG"
 need_file "$SCENE"
 need_file "$MAP"
-need_file "$ROOT/maps/tabletop.pgm"
+need_file "$ROOT/maps/tabletop_nav.pgm"
 need_file "$WS/src/mobile_manipulator_moveit_config/launch/move_group_gazebo.launch.py"
 need_file "$WS/src/mobile_manipulator_moveit_config/launch/moveit_rviz.launch.py"
 need_file "$WS/src/mobile_manipulator_moveit_config/config/mm_camera.rviz"
@@ -112,9 +117,19 @@ fi
 [[ $# -eq 0 ]] || fail 'Usage: ./runRobot.sh [--check]'
 
 # Catch a frequent accidental case before spawning duplicate servers.
-if timeout 5 ros2 node list 2>/dev/null | grep -qx '/move_group'; then
-  fail 'Existing /move_group detected. Close the previous session first.'
+# The ros2 CLI daemon caches the node graph; right after a previous session is stopped
+# it still lists /move_group, /cup_detector, ... for a while. That used to block a quick
+# restart and could make the readiness checks below pass on stale entries. Flush it
+# (it restarts on demand) and decide from real processes instead (next check).
+# Leftover processes from an earlier session (or a hand-started detector) double the
+# CPU load and steal Fast DDS discovery slots. Refuse rather than run two copies.
+leftovers="$(pgrep -af 'gz sim (server|gui|-)|python3 [^ ]*cup_detector\.py|nav2_controller/controller_server|component_container_isolated|moveit_ros_move_group/move_group' \
+  | grep -v -e pgrep -e "$$" || true)"
+if [[ -n "$leftovers" ]]; then
+  printf '%s\n' "$leftovers" >&2
+  fail 'Processes from a previous session are still running (listed above). Stop them first, e.g.: pkill -f "gz sim"; pkill -f cup_detector.py'
 fi
+timeout 20 ros2 daemon stop >/dev/null 2>&1 || true
 
 LOG_DIR="$ROOT/logs/run_$(date +%Y%m%d_%H%M%S)_$$"
 mkdir -p "$LOG_DIR"
@@ -156,31 +171,46 @@ wait_for_line() {
   fail "Timed out waiting for $label: $expected"
 }
 
-# Wait for a Nav2 lifecycle manager to report its nodes active, read from the launch
-# log rather than `ros2 lifecycle get` (that CLI probe intermittently never finds the
-# node in this busy graph, even though map_server/AMCL are already active).
-wait_for_lifecycle() {
-  local label="$1" seconds="$2" log="$LOG_DIR/$3.log" manager="$4"
-  local started=$SECONDS
-  message "Waiting for $label (maximum ${seconds}s)"
-  while ((SECONDS - started < seconds)); do
-    check_children
-    if grep -aEq "${manager}\]: .*Managed nodes are active" "$log" 2>/dev/null; then
-      message "Ready: $label"
-      return 0
-    fi
-    if grep -aEq "${manager}\]: .*(Failed to bring up|Aborting bringup)" "$log" 2>/dev/null; then
-      fail "$label: $manager failed to activate its nodes (see $log)"
-    fi
+# Start a Nav2 lifecycle launch and wait for its manager to report active. A lifecycle
+# service reply is occasionally lost under load ("failed to send response to
+# .../change_state"), which leaves the manager waiting forever; restart that launch
+# (up to 3 tries) instead of failing the whole session.
+#   start_lifecycle <name> <label> <manager> <seconds-per-try> <command...>
+start_lifecycle() {
+  local name="$1" label="$2" manager="$3" seconds="$4"; shift 4
+  local try started log="$LOG_DIR/$name.log" last
+  for try in 1 2 3; do
+    start "$name" "$@"
+    started=$SECONDS
+    message "Waiting for $label (try $try/3, maximum ${seconds}s)"
+    while ((SECONDS - started < seconds)); do
+      check_children
+      if grep -aEq "${manager}\]: .*Managed nodes are active" "$log" 2>/dev/null; then
+        message "Ready: $label"
+        return 0
+      fi
+      grep -aEq "${manager}\]: .*(Failed to bring up|Aborting bringup)" "$log" 2>/dev/null && break
+      sleep 2
+    done
+    message "$label did not come up on try $try; restarting $name"
+    last=$(( ${#PIDS[@]} - 1 ))
+    kill -TERM -- "-${PIDS[$last]}" 2>/dev/null || true
+    sleep 3
+    kill -KILL -- "-${PIDS[$last]}" 2>/dev/null || true
+    unset 'PIDS[last]' 'NAMES[last]'
+    PIDS=("${PIDS[@]}"); NAMES=("${NAMES[@]}")
+    cp "$log" "$LOG_DIR/${name}_try${try}.log" 2>/dev/null || true
     sleep 2
   done
-  fail "Timed out waiting for $label ($manager in $log)"
+  fail "$label: $manager did not activate after 3 tries (see $LOG_DIR/${name}_try*.log)"
 }
 
 # Terminal 1: Gazebo
-# MM_GZ_HEADLESS=1 runs the Gazebo server only (no GUI window, ~3 cores freed; RViz still works).
+# Headless by default: the Gazebo GUI alone costs ~1.7 cores and RViz already shows the
+# robot, camera, map and plans. MM_GZ_HEADLESS=0 starts the GUI too; or attach a GUI to
+# the running server any time with:  GZ_IP=127.0.0.1 gz sim -g
 GZ_ARGS=(-r -v 4)
-[[ "${MM_GZ_HEADLESS:-0}" == 1 ]] && GZ_ARGS+=(-s)
+[[ "${MM_GZ_HEADLESS:-1}" == 1 ]] && GZ_ARGS+=(-s)
 start gazebo gz sim "${GZ_ARGS[@]}" "$WORLD"
 wait_for_line 'Gazebo tabletop world' 120 '/world/tabletop/create' gz service -l
 
@@ -199,6 +229,15 @@ wait_for_line 'Clearpath controller manager' 180 \
   '/a200_0000/controller_manager/list_controllers' ros2 service list
 wait_for_line 'Kinova trajectory action' 120 \
   '/a200_0000/arm_0_joint_trajectory_controller/follow_joint_trajectory' ros2 action list
+
+# The joystick nodes do nothing in simulation (no /dev/input/ps4) but each holds one of
+# the 32 Fast DDS discovery slots (LOCALHOST range), and the full stack needs 33.
+# Stop them so every stack node stays discoverable. MM_KEEP_JOY=1 keeps them.
+if [[ "${MM_KEEP_JOY:-0}" != 1 ]]; then
+  pkill -f 'joy_linux/joy_linux_node' 2>/dev/null || true
+  pkill -f 'teleop_twist_joy/teleop_node' 2>/dev/null || true
+  message 'Stopped unused joystick nodes (frees 2 DDS discovery slots)'
+fi
 
 # Cup DetachableJoint (dex3_extras.urdf.xacro). gz-sim 8 ignores <initial_attach>false</...>
 # and welds the cup to left_hand_palm_link as soon as the robot spawns, ~0.6 m away. Any
@@ -238,6 +277,24 @@ if timeout 15 ros2 topic echo --once "$CAM/camera_info" --field header.frame_id 
   message "Ready: wrist camera on $CAM/{image,depth_image,camera_info}"
 else
   message "Warning: no frames on $CAM/camera_info yet; inspect camera_bridge.log"
+fi
+
+# YOLO cup detector. Started HERE, before MoveIt/Nav2, on purpose:
+# with ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST, Fast DDS only probes participant
+# slots 0-31. The full stack fills all 32, so a detector started afterwards gets
+# slot >= 32 and is invisible to every later process (pick scripts get no
+# detections even though the detector logs them). Set MM_START_DETECTOR=0 to skip.
+if [[ "${MM_START_DETECTOR:-1}" == 1 ]]; then
+  YOLO_PY="${MM_YOLO_PYTHON:-/opt/yolo_venv/bin/python3}"
+  need_file "$YOLO_PY"
+  need_file "$ROOT/perception/cup_detector.py"
+  # One torch thread and 2 frames/s: it used ~2.2 cores at the defaults. observe_cup
+  # needs 10 samples, i.e. ~5 s at 2 Hz.
+  start cup_detector env OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 \
+    "$YOLO_PY" "$ROOT/perception/cup_detector.py" --threads 1 --max-rate 2 \
+    --device "${MM_YOLO_DEVICE:-0}"   # GPU 0 (CUDA is available in the venv); MM_YOLO_DEVICE=cpu to force CPU
+  # Do not continue until its DDS participant exists, so it keeps a low slot.
+  wait_for_line 'Cup detector node' 120 '/cup_detector' ros2 node list
 fi
 
 # Terminal 3: Dex3 controller. The controller manager service may be advertised
@@ -296,8 +353,8 @@ start move_group ros2 launch mobile_manipulator_moveit_config move_group_gazebo.
 wait_for_line 'MoveIt planning scene' 120 '/apply_planning_scene' ros2 service list
 
 # Terminal 5: RViz
-# RViz runs under gdb so a segfault leaves a backtrace in rviz.log (MM_RVIZ_GDB=false to skip)
-start rviz ros2 launch mobile_manipulator_moveit_config moveit_rviz.launch.py "gdb:=${MM_RVIZ_GDB:-true}"
+# MM_RVIZ_GDB=true runs RViz under gdb so a segfault leaves a backtrace in rviz.log.
+start rviz ros2 launch mobile_manipulator_moveit_config moveit_rviz.launch.py "gdb:=${MM_RVIZ_GDB:-false}"
 wait_for_line 'RViz' 120 '/rviz2' ros2 node list
 if ! timeout 10 ros2 param set /rviz2 use_sim_time true >"$LOG_DIR/rviz_clock.log" 2>&1; then
   message 'Warning: Could not enable simulation time in RViz; inspect rviz_clock.log'
@@ -315,39 +372,55 @@ fi
 # Terminal 7: AMCL localization using saved occupancy map
 message 'Starting map server and AMCL'
 
-start localization ros2 launch clearpath_nav2_demos localization.launch.py \
+# Repo wrapper: AMCL tuned in config/nav2/a200_localization.yaml. The map is generated
+# from the world by scripts/make_map_from_world.py (map frame == Gazebo world).
+start_lifecycle localization 'Map server + AMCL active' lifecycle_manager_localization 30 \
+  ros2 launch "$ROOT/launch/localization_custom.launch.py" \
   use_sim_time:=true \
   "setup_path:=$HOME/clearpath" \
   "map:=$MAP" \
   scan_topic:=/a200_0000/sensors/lidar2d_0/scan
 
-wait_for_lifecycle 'Map server + AMCL active' 180 localization \
-  lifecycle_manager_localization
-
 # Random-start initialization: distribute AMCL particles across free map space
 wait_for_line 'AMCL global-localization service' 60 \
   '/a200_0000/reinitialize_global_localization' ros2 service list
 
-message 'Initializing AMCL global localization'
-
-if ! timeout 30 ros2 service call \
-    /a200_0000/reinitialize_global_localization \
-    std_srvs/srv/Empty '{}' \
-    >"$LOG_DIR/amcl_initialization.log" 2>&1; then
-  fail 'AMCL global localization initialization failed'
+# Simulation: seed AMCL with the robot's true Gazebo pose (map frame == Gazebo world).
+# Random global localization left AMCL ~18 cm / 3 deg off until the base had driven
+# around, which put stations, drop points and arrival checks in the wrong place.
+# MM_AMCL_INIT=global restores the random global start.
+if [[ "${MM_AMCL_INIT:-truth}" == global ]]; then
+  message 'Initializing AMCL global localization'
+  if ! timeout 30 ros2 service call \
+      /a200_0000/reinitialize_global_localization \
+      std_srvs/srv/Empty '{}' \
+      >"$LOG_DIR/amcl_initialization.log" 2>&1; then
+    fail 'AMCL global localization initialization failed'
+  fi
+else
+  message 'Seeding AMCL from Gazebo ground truth'
+  if ! (cd "$ROOT/scripts" && timeout 120 python3 seed_amcl_from_gazebo.py) \
+      >"$LOG_DIR/amcl_initialization.log" 2>&1; then
+    cat "$LOG_DIR/amcl_initialization.log" >&2
+    fail 'Could not seed AMCL from Gazebo (see amcl_initialization.log)'
+  fi
+  tail -n 1 "$LOG_DIR/amcl_initialization.log"
 fi
 
 # Terminal 8: Nav2 navigation
 message 'Starting Nav2 navigation stack'
 
-start navigation ros2 launch clearpath_nav2_demos nav2.launch.py \
+# Repo wrapper around clearpath_nav2_demos/nav2.launch.py using slowed limits
+# from config/nav2/a200_nav2_slow.yaml (fast turns made AMCL jump).
+# MM_NAV2_COMPOSITION=true would run all Nav2 servers in one process (~13 fewer
+# processes and DDS slots) but the composed MPPI controller segfaults here, so off.
+start_lifecycle navigation 'Nav2 stack active' lifecycle_manager_navigation 90 \
+  ros2 launch "$ROOT/launch/nav2_slow.launch.py" \
   use_sim_time:=true \
+  "params_file:=$NAV2_PARAMS" \
   "setup_path:=$HOME/clearpath" \
   scan_topic:=/a200_0000/sensors/lidar2d_0/scan \
-  slam:=false
-
-wait_for_lifecycle 'Nav2 stack active' 240 navigation \
-  lifecycle_manager_navigation
+  "use_composition:=${MM_NAV2_COMPOSITION:-false}"
 
 wait_for_line 'NavigateToPose action' 90 \
   '/a200_0000/navigate_to_pose' ros2 action list

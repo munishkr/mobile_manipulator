@@ -1,9 +1,9 @@
 # Cup perception (YOLO + wrist RGB-D) and camera-driven pick-and-place
 
 Finds the tabletop cup with a fine-tuned YOLOv8n on the `cup_wrist_rgbd` camera,
-turns the 2D box + depth into the cup centre in `base_link`, and drives
-`scripts/automate_cup.py --cup-source vision`: look, detect, pick, lift, put the
-cup back where it was found, release. Simulation only.
+turns the 2D box + depth into the cup centre in `base_link`, and feeds
+`scripts/station_pick_and_place.py`: navigate, look, detect, pick, carry, place,
+release. Simulation only.
 
 ## What YOLO is used for
 
@@ -39,13 +39,11 @@ cd ~/mobile_manipulator/perception
 # 0. arm in the look pose (config/saved_states/cup_look_pose.json): whole table in "Wrist RGB"
 python3 collect_cup_dataset.py --count 600              # resumable; re-run adds more
 /opt/yolo_venv/bin/python3 train_cup_yolo.py --epochs 30 --imgsz 416
-/opt/yolo_venv/bin/python3 cup_detector.py &            # keep running
+/opt/yolo_venv/bin/python3 cup_detector.py &            # only without runRobot.sh, which starts it itself
 python3 eval_cup_detector.py --trials 20
 
 cd ../scripts
-python3 automate_cup.py --cup-source vision                       # plan only
-python3 automate_cup.py --cup-source vision --execute --release   # one full cycle
-python3 run_pick_place_cycles.py --cycles 10 [--random]           # scored runs
+python3 station_pick_and_place.py --cup-x 0.95 --cup-y 0.0 --drop-x 1.3 --drop-y -0.1 --execute  # navigate + pick + place
 python3 automate_cup.py --reset                                   # recover: cup back to start
 ```
 
@@ -107,8 +105,7 @@ the final point is re-sent once (`settle_to`) before the check fails.
 1. **Far spots (x >= 0.98)** reach the arm's limits: a partial straight lift and then no
    constrained OMPL transfer. A base move or a lower clearance height would help.
    Random spots have not been rerun on the fixed sim.
-2. `run_pick_place_cycles.py` stops when the cup is off the table; recovery is still
-   manual (`automate_cup.py --reset`).
+2. When the cup is off the table, recovery is manual (`automate_cup.py --reset`).
 3. RViz MotionPlanning segfault: still waiting for a gdb backtrace.
 
 ## Limits

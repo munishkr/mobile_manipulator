@@ -1,20 +1,13 @@
 #!/usr/bin/env python3
-"""Repeatable pick/transfer/place for A200 + Kinova + Dex3 (Gazebo Harmonic).
+"""Cup grasping for A200 + Kinova + Dex3 (Gazebo Harmonic), used as a library.
 
-Requires the SAME working scripts in this directory:
-  place_cup.py, place_cup_hybrid.py, release_cup_safe.py,
-  sync_gazebo_cup_to_moveit.py
+station_pick_and_place.py imports this module for the pick half of a cycle: look pose,
+vision, grasp search, approach, confirmed Gazebo attach, MoveIt sync, hand retreat.
 
-The ONLY unknown needed for a repeatable pickup is the palm-to-cup pose.
-Teach it once with --teach, at a cup pose that is known to be graspable.
-
-Modes:
-  --teach           Read-only robot capture; writes one calibration JSON file.
-  --reset           Explicitly detach/reset cup to world start; update MoveIt world scene.
-  (default)         PLAN ONLY pregrasp and pickup approach; no motion or scene changes.
-  --execute         Open Dex3, plan + execute approach, close Dex3, Gazebo attach,
-                    sync MoveIt, OMPL+Cartesian transfer; KEEP CUP ATTACHED.
-  --execute --release  Same, plus the verified guarded release helper.
+Run directly it only has two maintenance modes:
+  --teach   Read-only capture of the palm-to-cup pose; writes the calibration JSON.
+            Teach once, at a cup pose that is known to be graspable.
+  --reset   Detach the cup, put it back at its start pose, update the MoveIt scene.
 
 Do NOT run this on a physical robot. It assumes the known Gazebo tabletop world.
 """
@@ -95,15 +88,6 @@ def relative_pose(child, parent):
     trans = pc.rotate(inv, delta)
     rot = pc.qmul(inv, normalized(quaternion(child)))
     return {'position': list(trans), 'quaternion': list(normalized(rot))}
-
-
-def compose_pose(parent, rel):
-    out = Pose()
-    pq = normalized(quaternion(parent))
-    translation = pc.rotate(pq, rel['position'])
-    position = tuple(a+b for a,b in zip(xyz(parent), translation))
-    orient = pc.qmul(pq, normalized(rel['quaternion']))
-    return set_pose(out, position, orient)
 
 
 def orientation_error_deg(q1, q2):
@@ -306,16 +290,23 @@ def plan_joint_target(node, planner, start, target, label, planning_time):
         c.weight = 1.0
         constraint.joint_constraints.append(c)
     m.goal_constraints = [constraint]
-    result = pc.service(node, planner, req, 'GetMotionPlan',
-                        timeout=max(35, 4*planning_time+12))
-    response = result.motion_plan_response
-    traj = response.trajectory
-    pc.unwrap_to_start(traj.joint_trajectory, start)
-    print(f'{label}: code={response.error_code.val}, '
-          f'points={len(traj.joint_trajectory.points)}, '
-          f'planning_time={response.planning_time:.2f}s')
+    # OMPL checks collisions at coarse steps along a path, so it sometimes returns a
+    # path that brushes the cup; MoveIt's ValidateSolution then fails the whole request
+    # (code 99999). A fresh plan almost always avoids it: retry a few times.
+    for attempt in range(1, 4):
+        result = pc.service(node, planner, req, 'GetMotionPlan',
+                            timeout=max(35, 4*planning_time+12))
+        response = result.motion_plan_response
+        traj = response.trajectory
+        print(f'{label}: code={response.error_code.val}, '
+              f'points={len(traj.joint_trajectory.points)}, '
+              f'planning_time={response.planning_time:.2f}s'
+              + (f' (attempt {attempt}/3)' if attempt > 1 else ''), flush=True)
+        if response.error_code.val == MoveItErrorCodes.SUCCESS:
+            break
     if response.error_code.val != MoveItErrorCodes.SUCCESS:
         raise RuntimeError(f'{label}: RRTConnect/OMPL returned {response.error_code.val}')
+    pc.unwrap_to_start(traj.joint_trajectory, start)
     if set(traj.joint_trajectory.joint_names) != set(ARM):
         raise RuntimeError(f'{label}: unexpected trajectory joint names')
     if len(traj.joint_trajectory.points) < 2:
@@ -636,11 +627,29 @@ def execute_approach(node, args, data):
     if distance>.035 or angle>10:
         raise RuntimeError('Grasp alignment outside tolerance; refusing Gazebo attachment')
     def gazebo_attach():
-        print('Publishing Gazebo attachment request ...')
-        proc=subprocess.run(['gz','topic','-t','/cup_grasp/attach','-m','gz.msgs.Empty','-p',''],
-                            capture_output=True,text=True,timeout=20)
-        if proc.returncode != 0:
-            raise RuntimeError('Gazebo attach command failed: '+(proc.stderr or proc.stdout))
+        # `gz topic -p` is a one-shot publisher: under load the message is sometimes
+        # lost, the cup is never welded, and the arm then lifts away without it and
+        # knocks it over. Gazebo (-v 4) logs "Attaching entity" when the weld really
+        # happens, so confirm against the newest runRobot gazebo.log and re-publish.
+        log = newest_gazebo_log()
+        before = count_in_file(log, 'Attaching entity')
+        for attempt in range(1, 6):
+            print(f'Publishing Gazebo attachment request (attempt {attempt}/5) ...', flush=True)
+            proc=subprocess.run(['gz','topic','-t','/cup_grasp/attach','-m','gz.msgs.Empty','-p',''],
+                                capture_output=True,text=True,timeout=20)
+            if proc.returncode != 0:
+                raise RuntimeError('Gazebo attach command failed: '+(proc.stderr or proc.stdout))
+            if log is None:
+                print('WARN: no gazebo.log found; attachment cannot be confirmed')
+                return
+            end = time.time() + 2.5
+            while time.time() < end:
+                if count_in_file(log, 'Attaching entity') > before:
+                    print('Gazebo confirmed the attachment.')
+                    return
+                time.sleep(0.25)
+        raise RuntimeError('Gazebo never confirmed the cup attachment after 5 requests; '
+                           'fingers not closed, cup left where it stands')
     if not args.close_before_attach:
         # Weld the cup where it stands, then close: closing first pushes it ~6 mm and
         # tilts it ~7 deg, the weld keeps that, and every place lands ~1-2 cm short.
@@ -683,6 +692,25 @@ def execute_planned(node, trajectory, label):
     time.sleep(.35)
 
 
+def newest_gazebo_log():
+    """gazebo.log of the most recent runRobot.sh session, or None."""
+    logs = sorted((pc.ROOT / 'logs').glob('run_*/gazebo.log'), key=lambda f: f.stat().st_mtime) \
+        if hasattr(pc, 'ROOT') else []
+    if not logs:
+        logs = sorted((Path(__file__).resolve().parent.parent / 'logs').glob('run_*/gazebo.log'),
+                      key=lambda f: f.stat().st_mtime)
+    return logs[-1] if logs else None
+
+
+def count_in_file(path, needle):
+    if path is None:
+        return 0
+    try:
+        return path.read_bytes().count(needle.encode())
+    except OSError:
+        return 0
+
+
 def retreat_from_cup_if_touching(node, args):
     """After a release MoveIt sees the open palm touching the cup, so every plan from
     that state fails CheckStartStateCollision. If the ONLY contacts are hand<->cup,
@@ -696,26 +724,48 @@ def retreat_from_cup_if_touching(node, args):
     cp = cup_obj.primitive_poses[0].position if cup_obj.primitive_poses else cup_obj.pose.position
     if cup_obj.primitive_poses and (cup_obj.pose.position.x or cup_obj.pose.position.y):
         cp = cup_obj.pose.position   # object-level pose used instead of primitive pose
-    palm = pc.palm_fk(node, fk, scene.robot_state).position
-    gap = math.dist((palm.x, palm.y, palm.z), (cp.x, cp.y, cp.z))
-    if gap > 0.15:
-        return
+    # Decide from the actual collision check. (A palm-to-cup distance pre-filter
+    # compared base_link FK with the odom-frame cup, which only matched while the
+    # base sat at the odom origin; with a mobile base it silently skipped retreats.)
     req = GetStateValidity.Request()
     req.robot_state = scene.robot_state
     req.group_name = pc.GROUP
     res = pc.service(node, validity, req, 'GetStateValidity', timeout=15)
     bodies = {b for c in res.contacts for b in (c.contact_body_1, c.contact_body_2)}
+    fkreq = GetPositionFK.Request()
+    fkreq.header.frame_id = cup_obj.header.frame_id      # same frame as the cup object
+    fkreq.fk_link_names = [pc.PALM]
+    fkreq.robot_state = scene.robot_state
+    fkans = pc.service(node, fk, fkreq, 'GetPositionFK')
+    palm = fkans.pose_stamped[0].pose.position if fkans.pose_stamped else None
+    gap = math.dist((palm.x, palm.y, palm.z), (cp.x, cp.y, cp.z)) if palm else 9.9
+    touching = (not res.valid) and pc.CUP_ID in bodies
+    # Also retreat when the open hand still surrounds the cup without touching it
+    # (right after a release): plans from there clip the cup with the thumb and fail
+    # ValidateSolution even though the start state itself is valid.
+    if not touching and gap > 0.14:
+        return
     others = {b for b in bodies if b != pc.CUP_ID and not b.startswith('left_hand_')}
     if others:
         raise RuntimeError(f'Start state in collision with {sorted(bodies)}; not retreating')
-    data = load_calibration(getattr(args, 'calibration', DEFAULT_CALIBRATION))
-    off = rotate_fixed_grasp(data['world_fixed_grasp'],
-                             getattr(args, 'grasp_yaw', None) if getattr(args, 'grasp_yaw', None)
-                             is not None else last_grasp_yaw())['palm_minus_cup_xyz_m']
-    norm = math.hypot(off[0], off[1])
-    base = pc.gazebo_pose(getattr(args, 'robot_model', 'a200_0000/robot'))
-    world_delta = (0.08*off[0]/norm, 0.08*off[1]/norm, 0.04)
-    delta = pc.rotate(pc.qinv(pc.quat(*base[3:])), world_delta)
+    # Retreat along the actual cup->palm direction (+ up). The stored grasp yaw is in
+    # world coordinates from the LAST grasp; after driving to another station the base
+    # has turned, so that direction no longer points away from the cup.
+    if palm is None:
+        raise RuntimeError('retreat from cup: palm FK unavailable')
+    off = (palm.x - cp.x, palm.y - cp.y)
+    norm = math.hypot(*off)
+    if norm < 1e-3:
+        raise RuntimeError('retreat from cup: palm is on the cup axis; direction undefined')
+    world_delta = (0.08 * off[0] / norm, 0.08 * off[1] / norm, 0.04)   # cup-object frame
+    mdof = scene.robot_state.multi_dof_joint_state
+    byaw = 0.0
+    if 'mobile_base_joint' in mdof.joint_names:
+        q = mdof.transforms[list(mdof.joint_names).index('mobile_base_joint')].rotation
+        byaw = math.atan2(2 * (q.w * q.z + q.x * q.y), 1 - 2 * (q.y * q.y + q.z * q.z))
+    c, s = math.cos(-byaw), math.sin(-byaw)
+    delta = (c * world_delta[0] - s * world_delta[1], s * world_delta[0] + c * world_delta[1],
+             world_delta[2])
     start = scene.robot_state
     goal = pc.waypoint(pc.palm_fk(node, fk, start), delta)
     cart = node.create_client(GetCartesianPath, '/compute_cartesian_path')
@@ -846,9 +896,14 @@ def reset_cup(node,args):
     time.sleep(.5)
     request=(f'name: "cup", position: {{x: {TABLE_START[0]}, y: {TABLE_START[1]}, '
              f'z: {TABLE_START[2]}}}, orientation: {{w: 1.0}}')
-    result=subprocess.run(['gz','service','-s','/world/tabletop/set_pose',
-         '--reqtype','gz.msgs.Pose','--reptype','gz.msgs.Boolean',
-         '--timeout','3000','--req',request],capture_output=True,text=True,timeout=15)
+    for attempt in range(1, 4):       # the service occasionally times out under load
+        result=subprocess.run(['gz','service','-s','/world/tabletop/set_pose',
+             '--reqtype','gz.msgs.Pose','--reptype','gz.msgs.Boolean',
+             '--timeout','5000','--req',request],capture_output=True,text=True,timeout=20)
+        if not result.returncode and 'data: true' in result.stdout:
+            break
+        print(f'Gazebo set_pose attempt {attempt}/3 failed; retrying', flush=True)
+        time.sleep(1.0)
     if result.returncode or 'data: true' not in result.stdout:
         raise RuntimeError('Gazebo set_pose failed: '+result.stdout+' '+result.stderr)
     time.sleep(1.0)
@@ -875,141 +930,28 @@ def reset_cup(node,args):
 
 def arguments():
     p=argparse.ArgumentParser(description=__doc__,formatter_class=argparse.RawDescriptionHelpFormatter)
-    modes=p.add_mutually_exclusive_group()
+    modes=p.add_mutually_exclusive_group(required=True)
     modes.add_argument('--teach',action='store_true',help='Store open-hand grasp pose relative to cup once')
     modes.add_argument('--reset',action='store_true',help='Detach and restore cup, including MoveIt world pose')
-    modes.add_argument('--execute',action='store_true',help='Plan and execute pickup + transfer; do not release unless --release')
-    p.add_argument('--release',action='store_true',help='With --execute, perform guarded release (full cycle)')
     p.add_argument('--calibration',type=Path,default=DEFAULT_CALIBRATION)
     p.add_argument('--overwrite',action='store_true',help='Allow replacing grasp calibration')
     p.add_argument('--teach-lower-m',type=float,default=0.0,
         help='When teaching from POST-RELEASE pose, virtually lower palm in world Z by this many meters; does not move robot')
     p.add_argument('--robot-model',default='a200_0000/robot')
-    p.add_argument('--cup-source',choices=('gazebo','vision'),default='gazebo',
-                   help='vision: cup pose from perception/cup_detector.py (/cup_detector/pose); '
-                        'gazebo: ground-truth model pose (original behaviour)')
-    p.add_argument('--look-pose',type=Path,default=DEFAULT_LOOK_POSE,
-                   help='Arm joints for the wrist-camera view (vision, --execute only)')
-    p.add_argument('--no-look',action='store_true',
-                   help='vision: detect from the current arm pose; do not move to --look-pose')
-    p.add_argument('--vision-samples',type=int,default=10)
-    p.add_argument('--vision-timeout',type=float,default=15.0)
-    p.add_argument('--vision-max-spread',type=float,default=.010,
-                   help='max distance (m) of any sample from the median detection')
-    p.add_argument('--place-x',type=float,default=None,
-                   help='cup-centre world X for placing; default .90, or the picked X with vision')
-    p.add_argument('--place-y',type=float,default=None,
-                   help='cup-centre world Y for placing; default .16, or the picked Y with vision')
-    p.add_argument('--clearance-z',type=float,default=1.00,
-                   help='cup-centre world Z while carried; 1.10 had no reachable goal with the taught wrist orientation')
-    p.add_argument('--no-finger-relax',action='store_true',
-                   help='keep the taught (inside-the-cup) finger targets after the close')
-    p.add_argument('--close-before-attach',action='store_true',
-                   help='old order: close the fingers, then weld (cup tilts ~7 deg in the hand '
-                        'and every place lands ~1-2 cm short)')
-    p.add_argument('--release-z',type=float,default=None,
-                   help='cup-centre world Z at release; default .88, or .83 with vision '
-                        '(~2 cm above the table, i.e. put back where it was)')
-    p.add_argument('--backoff',type=float,default=.08,
-                   help='Pregrasp retreat distance (m), direction set by --backoff-dir')
-    p.add_argument('--approach',choices=('cartesian','ompl'),default='cartesian',
-                   help='final pregrasp->grasp move: straight Cartesian line (default) or OMPL')
-    p.add_argument('--no-grasp-search',action='store_true',
-                   help='use the taught grasp as-is instead of searching yaw/posture')
-    p.add_argument('--grasp-yaws',type=float,nargs='+',
-                   default=[-60,-45,-30,-15,0,15,30,45,60],
-                   help='grasp rotations about the cup axis to try (deg)')
-    p.add_argument('--grasp-seeds',type=int,default=4,
-                   help='extra random IK seeds per yaw (arm posture search)')
-    p.add_argument('--backoff-dir',choices=('palm','world-x'),default='palm',
-                   help='palm: retreat along cup->palm (default); world-x: original -X retreat')
-    p.add_argument('--pregrasp-raise',type=float,default=.04,
-                   help='Pregrasp height above grasp palm target (m)')
-    p.add_argument('--planning-time',type=float,default=15.0)
-    p.add_argument('--require-start-cup',action='store_true',
-                   help='Require cup near original spawn position (.95,0,.811)')
     return p.parse_args()
 
 
 def main():
     args=arguments()
-    if args.release and not args.execute:
-        raise RuntimeError('--release requires --execute')
     if not (0.0 <= args.teach_lower_m <= 0.10):
         raise RuntimeError('--teach-lower-m must be 0..0.10 m')
-    if args.backoff < 0.03 or args.backoff > .20:
-        raise RuntimeError('backoff must be 0.03..0.20 m')
-    if args.pregrasp_raise < 0 or args.pregrasp_raise > .12:
-        raise RuntimeError('pregrasp-raise must be 0..0.12 m')
-    for name in ('place_cup.py','place_cup_hybrid.py','release_cup_safe.py',
-                 'sync_gazebo_cup_to_moveit.py'):
-        if not Path(__file__).with_name(name).is_file():
-            raise RuntimeError('Missing dependency: '+name)
     rclpy.init()
     node=Node('automate_cup')
     try:
         if args.reset:
             reset_cup(node,args)
-            return 0
-        if args.teach:
-            capture(node,args)
-            return 0
-        data=load_calibration(args.calibration)
-        args.vision_cup=None
-        if args.cup_source=='vision':
-            if args.execute:
-                # Check BEFORE any motion: a cup still held from a failed run must not be
-                # carried to the look pose (seen in an unattended cycle run).
-                require_world_cup(current_scene(node))
-                check_table_cup(pc.gazebo_pose('cup'))
-            if args.execute and not args.no_look:
-                move_to_look_pose(node,args)
-            elif not args.no_look:
-                print('PLAN ONLY: not moving to the look pose; detecting from the current view.')
-            args.vision_cup, base = observe_cup(node,args)
-            if args.execute:
-                # Planning must see the cup where the camera found it, not at the start pose.
-                update_world_scene(node,args.vision_cup,base)
-                print('MoveIt world cup moved to the vision pose')
-        same_place = args.cup_source=='vision'
-        if args.place_x is None:
-            args.place_x = round(args.vision_cup[0],4) if same_place else .90
-        if args.place_y is None:
-            args.place_y = round(args.vision_cup[1],4) if same_place else .16
-        if args.release_z is None:
-            # .83: cup bottom ~2 cm above the table. At .82 a cup that slipped in the
-            # hand touched the table during the descent and stalled the wrist.
-            args.release_z = .83 if same_place else .88
-        print(f'Place target (cup centre, world): x={args.place_x} y={args.place_y} '
-              f'release_z={args.release_z}')
-        if not args.no_grasp_search:
-            select_grasp(node, current_scene(node), args, data)
-        if not args.execute:
-            print('MODE: PLAN ONLY. No motion, attachment or planning-scene change.')
-            scene=current_scene(node)
-            build_approach(node,scene,args,data)
-            print('APPROACH PLAN VALID. Transfer is validated only AFTER physical attachment.')
-            return 0
-        # Avoid automatically detaching a cup that may already be held.
-        if not args.require_start_cup:
-            args.require_start_cup=True
-        scene=current_scene(node)
-        require_world_cup(scene)
-        check_table_cup(pc.gazebo_pose('cup'))
-        execute_approach(node,args,data)
-        # Subprocess executes the same verified transfer script unchanged.
-        transfer=['--place-x',str(args.place_x),'--place-y',str(args.place_y),
-                  '--clearance-z',str(args.clearance_z),'--release-z',str(args.release_z),
-                  '--execute']
-        run_existing('place_cup_hybrid.py',transfer)
-        if args.release:
-            run_existing('release_cup_safe.py',[
-                '--place-x',str(args.place_x),'--place-y',str(args.place_y),
-                '--release-z',str(args.release_z),'--execute'])
-            print('FULL CYCLE COMPLETE: placement verified by release helper.')
         else:
-            print('TRANSFER COMPLETE, CUP STILL ATTACHED; '
-                  'use existing release_cup_safe.py after inspecting Gazebo.')
+            capture(node,args)
         return 0
     finally:
         node.destroy_node()

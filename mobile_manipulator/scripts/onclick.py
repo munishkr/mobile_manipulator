@@ -202,8 +202,7 @@ class ROIPointCloud(Node):
                     f"ROI selected: ({x0},{y0}) to ({x1},{y1})"
                 )
 
-    def process_roi(self, x0, y0, x1, y1,
-    depth, stamp, frame_id, encoding):
+    def process_roi(self, x0, y0, x1, y1, depth, stamp, frame_id, encoding):
         if self.depth is None or self.camera_info is None:
             self.get_logger().warn("Waiting for camera data")
             return
@@ -360,7 +359,12 @@ class ROIPointCloud(Node):
 
 
 def main(args=None):
-    rclpy.init(args=args)
+    # TF lives on /a200_0000/tf and image stamps are sim time; without these the
+    # TF lookup at the image stamp never succeeds and no cloud is published.
+    rclpy.init(args=['--ros-args',
+                     '-r', '/tf:=/a200_0000/tf',
+                     '-r', '/tf_static:=/a200_0000/tf_static',
+                     '-p', 'use_sim_time:=true'])
     
     # node1 = ImageClickListener()
     node2 = ROIPointCloud()
